@@ -1,76 +1,108 @@
 import axios from "axios";
 
+export interface ExtractedTicketData {
+  date: string;
+  supermarket: string;
+  items: { name: string; price: number; category: string }[];
+  total: number;
+}
+
 export const analyzeReceipt = async (
   imageUrl: string
-): Promise<{
-  extractedText: string;
-  advice: string;
-} | null> => {
-  try {
-    const apiKey = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY;
-
-    if (!apiKey) throw new Error("OpenRouter API key is missing");
-
-    // As a senior product manager, let's provide a prompt that delivers actionable value:
-    // - Extract all grocery items from the receipt.
-    // - Categorize items (e.g., fruits, vegetables, meat, fish, dairy, snacks, beverages, etc.).
-    // - Identify healthy and less healthy choices.
-    // - Suggest 2-3 practical tips for healthier or more budget-friendly shopping.
-    // - Summarize the overall nutritional quality and spending pattern.
-    // - Output should be clear, structured, and easy to understand for everyday users.
-
-    const response = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model: "google/gemini-2.0-flash-exp:free",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `
-You are a nutrition and shopping assistant. 
-Given the following receipt image, please:
-1. List all purchased items, grouping them into categories such as fruits, vegetables, meat, fish, dairy, grains, snacks, beverages, and others.
-2. For each category, highlight any items that are particularly healthy or less healthy.
-3. Provide a brief summary of the overall nutritional quality of this shopping trip.
-4. Suggest 2-3 actionable tips for making future shopping trips healthier or more budget-friendly.
-5. If possible, estimate the proportion of healthy vs. less healthy items.
-
-Please present your answer in a clear, structured format with bullet points or sections for each part.
-Thank you!
-                `.trim(),
-              },
-              {
-                type: "image_url",
-                image_url: { url: imageUrl },
-              },
-            ],
-          },
-        ],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    const content = response.data.choices[0].message.content;
-    console.log(
-      "AI analysis result:",
-      response.data.choices[0].message.content
-    );
-
-    // Return as { extractedText, advice }
-    return {
-      extractedText: content,
-      advice: content,
-    };
-  } catch (error) {
-    console.error("OpenRouter API Error:", error);
+): Promise<ExtractedTicketData | null> => {
+  const apiKey = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY;
+  if (!apiKey) {
+    console.error("OpenRouter API key is missing");
     return null;
   }
+
+  const maxRetries = 2;
+  let attempt = 0;
+
+  while (attempt < maxRetries) {
+    try {
+      attempt++;
+      if (attempt > 1) {
+        console.log(`OpenRouter: Retrying analysis (Attempt ${attempt})...`);
+      }
+
+      const response = await axios.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          model: "minimax/minimax-m3:free",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `Analyze this shopping ticket image and extract the following information in JSON format:
+- supermarket: name of the store
+- date: date of the receipt (YYYY-MM-DD)
+- total: total amount spent (number)
+- items: list of products, each with name, price (number).
+
+Return ONLY the JSON object.`.trim(),
+                },
+                {
+                  type: "image_url",
+                  image_url: { url: imageUrl },
+                },
+              ],
+            },
+          ],
+          response_format: { type: "json_object" },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": process.env.EXPO_PUBLIC_SITE_URL || "https://superticket.app",
+            "X-Title": process.env.EXPO_PUBLIC_SITE_NAME || "SuperTicket",
+          },
+          timeout: 120000, // 120 seconds timeout
+        }
+      );
+
+      // Check for provider errors in the successful response body
+      if (response.data?.error) {
+        const errorMsg = response.data.error.message || "Unknown provider error";
+        console.log(`OpenRouter Provider Error: ${errorMsg}`);
+        if (attempt < maxRetries) {
+          console.log("Waiting 2s before retry...");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          continue;
+        }
+        return null;
+      }
+
+      if (!response.data?.choices?.[0]?.message) {
+        console.log("OpenRouter: Invalid response structure (no choices)");
+        return null;
+      }
+
+      const content = response.data.choices[0].message.content;
+      if (!content) {
+        console.log("OpenRouter: Empty content returned");
+        return null;
+      }
+
+      const cleanJson = content.replace(/```json\n?|\n?```/g, "").trim();
+      return JSON.parse(cleanJson);
+
+    } catch (error: any) {
+      const status = error.response?.status;
+      const isRetryable = status === 502 || status === 503 || status === 504 || error.code === 'ECONNABORTED';
+      
+      console.log(`OpenRouter analysis failed: ${error.message}${status ? ` (Status ${status})` : ""}`);
+
+      if (attempt < maxRetries && isRetryable) {
+        console.log("Waiting 2s before retry...");
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
 };

@@ -1,145 +1,293 @@
 import React, { useState, useCallback } from "react";
-import { View, Text, Pressable, Image, Platform } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  ActivityIndicator,
+  Alert,
+  TextInput,
+} from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import { useStore } from "../store/ticketStore";
-import { uploadToImgBB } from "../utils/imgbb";
-import { analyzeReceipt } from "../utils/openrouter";
-import { router } from "expo-router";
+import { readAsStringAsync, EncodingType } from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
+import { useStore, Ticket } from "../store/ticketStore";
+import { analyzeReceipt, ExtractedTicketData } from "../utils/openrouter";
+import { FontAwesome } from "@expo/vector-icons";
+
+const formatPrice = (value: number) => `€${value.toFixed(2)}`;
 
 export default function TicketScanner() {
   const [image, setImage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const { setTicketImage, setExtractedData, setAdvice } = useStore();
+  const [analyzedTicket, setAnalyzedTicket] = useState<ExtractedTicketData | null>(
+    null
+  );
+  const [supermarketInput, setSupermarketInput] = useState("");
+  const { addTicket, loading, setLoading, resolveSupermarketName, rememberSupermarketName } =
+    useStore();
 
-  // Ensure permissions are requested on mount for iOS
   React.useEffect(() => {
-    (async () => {
-      if (Platform.OS !== "web") {
-        await ImagePicker.requestCameraPermissionsAsync();
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+    setLoading(false);
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setImage(null);
+    setAnalyzedTicket(null);
+    setSupermarketInput("");
+  }, []);
+
+  const takePhoto = useCallback(async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Denied",
+          "We need camera permissions to scan tickets."
+        );
+        return;
       }
-    })();
+
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.8,
+        allowsEditing: true,
+      });
+
+      if (!result.canceled && result.assets?.[0]) {
+        setImage(result.assets[0].uri);
+        setAnalyzedTicket(null);
+        setSupermarketInput("");
+      }
+    } catch (e) {
+      Alert.alert("Error", "Failed to take photo");
+    }
   }, []);
 
   const pickImage = useCallback(async () => {
     try {
-      const permission = await ImagePicker.getMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        const { status } =
-          await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== "granted") {
-          alert("Sorry, we need camera roll permissions to make this work!");
-          return;
-        }
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "We need access to your gallery.");
+        return;
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 1,
+        quality: 0.8,
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
+      if (!result.canceled && result.assets?.[0]) {
         setImage(result.assets[0].uri);
-        setTicketImage(result.assets[0].uri);
+        setAnalyzedTicket(null);
+        setSupermarketInput("");
       }
     } catch (e) {
-      alert("Error picking image: " + e);
+      Alert.alert("Error", "Failed to pick image");
     }
-  }, [setTicketImage]);
-
-  const takePhoto = useCallback(async () => {
-    try {
-      const permission = await ImagePicker.getCameraPermissionsAsync();
-      if (!permission.granted) {
-        const { status } = await ImagePicker.requestCameraPermissionsAsync();
-        if (status !== "granted") {
-          alert("Sorry, we need camera permissions to make this work!");
-          return;
-        }
-      }
-
-      const result = await ImagePicker.launchCameraAsync({
-        quality: 1,
-      });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        setImage(result.assets[0].uri);
-        setTicketImage(result.assets[0].uri);
-      }
-    } catch (e) {
-      alert("Error taking photo: " + e);
-    }
-  }, [setTicketImage]);
+  }, []);
 
   const processImage = useCallback(async () => {
-    if (!image) return;
+    if (!image) {
+      return;
+    }
+
     setLoading(true);
 
     try {
-      // Upload to ImgBB
-      const imageUrl = await uploadToImgBB(image);
-      if (!imageUrl) {
-        alert("Failed to upload image to ImgBB");
-        setLoading(false);
-        return;
-      }
+      const manipulatedImage = await ImageManipulator.manipulateAsync(
+        image,
+        [{ resize: { width: 800 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+      );
 
-      // Analyze with OpenRouter
-      const result = await analyzeReceipt(imageUrl);
+      const base64 = await readAsStringAsync(manipulatedImage.uri, {
+        encoding: EncodingType.Base64,
+      });
+      const dataUri = `data:image/jpeg;base64,${base64}`;
+
+      const result = await analyzeReceipt(dataUri);
       if (result) {
-        setExtractedData(result.extractedText);
-        setAdvice(result.advice);
-        // Navigate to /advice using Expo Router
-        // (make sure to import and use useRouter at the top of your component)
-        router.push("/advice");
+        setAnalyzedTicket(result);
+        setSupermarketInput(resolveSupermarketName(result.supermarket));
       } else {
-        alert("Failed to analyze receipt");
+        Alert.alert(
+          "Analysis Failed",
+          "Could not read ticket. Please try a clearer photo."
+        );
       }
     } catch (e) {
-      alert("Error processing image: " + e);
+      Alert.alert("Error", "Something went wrong during processing.");
     } finally {
       setLoading(false);
     }
-  }, [image, setExtractedData, setAdvice]);
+  }, [image, resolveSupermarketName, setLoading]);
+
+  const confirmTicket = useCallback(() => {
+    if (!image || !analyzedTicket) {
+      return;
+    }
+
+    const chosenSupermarket = supermarketInput.trim();
+    if (!chosenSupermarket) {
+      Alert.alert(
+        "Missing supermarket",
+        "Please write the supermarket name before saving the ticket."
+      );
+      return;
+    }
+
+    rememberSupermarketName(analyzedTicket.supermarket, chosenSupermarket);
+
+    const newTicket: Ticket = {
+      id: Math.random().toString(36).substr(2, 9),
+      date: analyzedTicket.date,
+      supermarket: chosenSupermarket,
+      items: analyzedTicket.items,
+      total: analyzedTicket.total,
+      imageUri: image,
+    };
+
+    const added = addTicket(newTicket);
+    clearSelection();
+
+    if (added) {
+      Alert.alert("Success", `Added ticket from ${chosenSupermarket}`);
+    } else {
+      Alert.alert(
+        "Duplicate ticket",
+        "This ticket looks like one you already scanned, so it was not added again."
+      );
+    }
+  }, [
+    addTicket,
+    analyzedTicket,
+    clearSelection,
+    image,
+    rememberSupermarketName,
+    supermarketInput,
+  ]);
 
   return (
-    <View className="flex-1 justify-center items-center p-4">
-      <Text className="text-2xl font-bold mb-4">Scan Your Receipt</Text>
-      {image && (
-        <Image source={{ uri: image }} className="w-64 h-64 mb-4 rounded" />
-      )}
-      <Pressable
-        className="bg-blue-500 p-4 rounded-lg mb-2"
-        onPress={takePhoto}
-        disabled={loading}
-        android_ripple={{ color: "#2563eb" }}
-        accessibilityRole="button"
-      >
-        <Text className="text-white text-center">Take Photo</Text>
-      </Pressable>
-      <Pressable
-        className="bg-green-500 p-4 rounded-lg mb-2"
-        onPress={pickImage}
-        disabled={loading}
-        android_ripple={{ color: "#22c55e" }}
-        accessibilityRole="button"
-      >
-        <Text className="text-white text-center">Upload from Gallery</Text>
-      </Pressable>
-      {image && (
+    <View className="p-6">
+      <View className="glass-card p-6 mb-6 items-center">
+        {image ? (
+          <View className="w-full rounded-xl mb-4 bg-emerald-50 border border-emerald-100 p-5">
+            <View className="flex-row items-center justify-between">
+              <View className="flex-1 pr-3">
+                <Text className="text-emerald-800 font-bold text-base">
+                  Ticket selected
+                </Text>
+                <Text className="text-emerald-700 text-sm mt-1">
+                  {analyzedTicket
+                    ? "Review the store name and save the ticket."
+                    : "Your photo is ready to analyze."}
+                </Text>
+              </View>
+              <View className="bg-emerald-100 p-3 rounded-full">
+                <FontAwesome
+                  name={analyzedTicket ? "pencil" : "check"}
+                  size={18}
+                  color="#047857"
+                />
+              </View>
+            </View>
+            <Pressable
+              onPress={clearSelection}
+              className="self-start mt-4 bg-white px-3 py-2 rounded-lg border border-emerald-200"
+            >
+              <Text className="text-emerald-700 font-semibold">Remove</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View className="w-full h-64 rounded-xl border-2 border-dashed border-slate-300 items-center justify-center bg-slate-50 mb-4">
+            <FontAwesome name="ticket" size={48} color="#94a3b8" />
+            <Text className="text-slate-400 mt-2 font-medium">
+              No ticket selected
+            </Text>
+          </View>
+        )}
+
+        <View className="flex-row gap-3 w-full">
+          <Pressable
+            onPress={takePhoto}
+            className="flex-1 bg-white border border-slate-200 p-4 rounded-xl flex-row items-center justify-center"
+          >
+            <FontAwesome name="camera" size={18} color="#475569" />
+            <Text className="text-slate-600 font-semibold ml-2">Camera</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={pickImage}
+            className="flex-1 bg-white border border-slate-200 p-4 rounded-xl flex-row items-center justify-center"
+          >
+            <FontAwesome name="image" size={18} color="#475569" />
+            <Text className="text-slate-600 font-semibold ml-2">Gallery</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {image && !analyzedTicket && (
         <Pressable
-          className={`bg-purple-500 p-4 rounded-lg ${
-            loading ? "opacity-50" : ""
-          }`}
+          className={`btn-primary ${loading ? "opacity-70" : ""}`}
           onPress={processImage}
           disabled={loading}
-          android_ripple={{ color: "#a21caf" }}
-          accessibilityRole="button"
         >
-          <Text className="text-white text-center">
-            {loading ? "Processing..." : "Process Receipt"}
+          {loading ? (
+            <ActivityIndicator color="white" className="mr-2" />
+          ) : (
+            <FontAwesome
+              name="magic"
+              size={18}
+              color="white"
+              className="mr-2"
+            />
+          )}
+          <Text className="btn-text ml-2">
+            {loading ? "Analyzing..." : "Analyze Ticket"}
           </Text>
         </Pressable>
+      )}
+
+      {analyzedTicket && (
+        <View className="bg-white rounded-3xl premium-shadow p-5">
+          <Text className="text-slate-900 font-bold text-lg mb-4">
+            Confirm supermarket
+          </Text>
+
+          <Text className="text-slate-500 text-xs mb-2">Supermarket name</Text>
+          <TextInput
+            value={supermarketInput}
+            onChangeText={setSupermarketInput}
+            placeholder="Write the supermarket name"
+            className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-4 text-slate-900 font-medium mb-4"
+          />
+
+          <View className="bg-slate-50 rounded-2xl p-4 mb-4">
+            <Text className="text-slate-500 text-xs mb-2">Scanned summary</Text>
+            <View className="flex-row justify-between mb-2">
+              <Text className="text-slate-500">Detected name</Text>
+              <Text className="font-semibold text-slate-900 flex-1 text-right">
+                {analyzedTicket.supermarket}
+              </Text>
+            </View>
+            <View className="flex-row justify-between mb-2">
+              <Text className="text-slate-500">Date</Text>
+              <Text className="font-semibold text-slate-900">
+                {analyzedTicket.date}
+              </Text>
+            </View>
+            <View className="flex-row justify-between">
+              <Text className="text-slate-500">Items / total</Text>
+              <Text className="font-semibold text-slate-900">
+                {analyzedTicket.items.length} items · {formatPrice(analyzedTicket.total)}
+              </Text>
+            </View>
+          </View>
+
+          <Pressable className="btn-primary" onPress={confirmTicket}>
+            <FontAwesome name="save" size={18} color="white" className="mr-2" />
+            <Text className="btn-text ml-2">Save Ticket</Text>
+          </Pressable>
+        </View>
       )}
     </View>
   );
