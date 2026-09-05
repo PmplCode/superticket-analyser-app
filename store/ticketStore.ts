@@ -1,9 +1,17 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  normalizeDateString,
+  getDateTimestamp,
+  todayISODate,
+} from "../utils/dates";
 
 export interface ProductPrice {
   price: number;
+  unit?: string;
+  quantity?: number;
+  unitPrice?: number;
   date: string;
   supermarket: string;
 }
@@ -32,7 +40,7 @@ export interface Ticket {
   id: string;
   date: string;
   supermarket: string;
-  items: { name: string; price: number; category: string }[];
+  items: { name: string; price: number; quantity?: number; unit?: string; category: string }[];
   total: number;
   imageUri?: string;
 }
@@ -134,8 +142,34 @@ const findCanonicalSupermarketName = (
 };
 
 const getTimestamp = (date: string) => {
-  const parsed = new Date(date).getTime();
+  const parsed = getDateTimestamp(date);
   return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const sanitizeMoney = (value: number) => {
+  if (
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    value >= 1_000_000
+  ) {
+    return 0;
+  }
+  return Math.round(value * 100) / 100;
+};
+
+const sanitizeTicket = (ticket: Ticket): Ticket => {
+  const items = ticket.items
+    .map((item) => ({ ...item, price: sanitizeMoney(item.price) }))
+    .filter((item) => item.price > 0);
+  const itemsTotal = items.reduce((sum, item) => sum + item.price, 0);
+  const moneyTotal = sanitizeMoney(ticket.total);
+
+  return {
+    ...ticket,
+    items,
+    total: moneyTotal > 0 ? moneyTotal : itemsTotal,
+    date: normalizeDateString(ticket.date) || todayISODate(),
+  };
 };
 
 const getSortedPricesByDate = (prices: ProductPrice[]) =>
@@ -188,26 +222,74 @@ const isDuplicateTicket = (existingTicket: Ticket, nextTicket: Ticket) =>
   Number(existingTicket.total.toFixed(2)) === Number(nextTicket.total.toFixed(2)) &&
   areTicketItemsEquivalent(existingTicket.items, nextTicket.items);
 
+const hashString = (str: string) => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(hash).toString(36).substr(0, 8);
+};
+
+const normalizeItemKey = (name: string) =>
+  name.toLowerCase().trim();
+
 const buildProductsFromTickets = (tickets: Ticket[]) => {
-  const products: Product[] = [];
+  const productsMap = new Map<string, Product>();
 
   tickets.forEach((ticket) => {
     ticket.items.forEach((item) => {
-      const existingProductIndex = products.findIndex(
-        (product) => product.name.toLowerCase() === item.name.toLowerCase()
-      );
+      const key = normalizeItemKey(item.name);
+      const existingProduct = productsMap.get(key);
 
-      const priceEntry = {
+      const priceEntry: ProductPrice = {
         price: item.price,
         date: ticket.date,
         supermarket: ticket.supermarket,
       };
 
-      if (existingProductIndex > -1) {
-        products[existingProductIndex].prices.push(priceEntry);
+      // Compute unit price if quantity and unit are known
+      if (item.quantity && item.unit) {
+        const quantity = item.quantity;
+        const unit = item.unit.toLowerCase();
+        let convertedQuantity = quantity;
+        // Convert to kg base for unit price comparison
+        if (unit === "kg" || unit === "kilogram") {
+          convertedQuantity = quantity;
+        } else if (unit === "g" || unit === "gram") {
+          convertedQuantity = quantity / 1000;
+        } else if (unit === "ml" || unit === "milliliter") {
+          convertedQuantity = quantity / 1000;
+        } else if (unit === "l" || unit === "liter") {
+          convertedQuantity = quantity;
+        } else if (unit === "pcs" || unit === "piece" || unit === "units") {
+          convertedQuantity = 1; // price per unit already
+        }
+        priceEntry.unitPrice = Math.round((item.price / convertedQuantity) * 100) / 100;
+        priceEntry.unit = item.unit;
+        priceEntry.quantity = item.quantity;
       } else {
-        products.push({
-          id: Math.random().toString(36).substr(2, 9),
+        // Default: assume 1 each, no unit price computed
+        priceEntry.quantity = 1;
+        priceEntry.unit = "each";
+      }
+
+      if (existingProduct) {
+        // Keep one entry per purchase: same price/supermarket/date/quantity/unit
+        const alreadyHas = existingProduct.prices.some(
+          (p) =>
+            p.price === priceEntry.price &&
+            p.supermarket === priceEntry.supermarket &&
+            p.date === priceEntry.date &&
+            p.quantity === priceEntry.quantity &&
+            p.unit === priceEntry.unit
+        );
+        if (!alreadyHas) {
+          existingProduct.prices.push(priceEntry);
+        }
+      } else {
+        productsMap.set(key, {
+          id: hashString(key),
           name: item.name,
           category: item.category,
           prices: [priceEntry],
@@ -216,7 +298,9 @@ const buildProductsFromTickets = (tickets: Ticket[]) => {
     });
   });
 
-  return products;
+return Array.from(productsMap.values(), (product) => ({
+  ...product,
+}));
 };
 
 const normalizePersistedData = (
@@ -229,14 +313,15 @@ const normalizePersistedData = (
   [...tickets]
     .reverse()
     .forEach((ticket) => {
+      const sanitized = sanitizeTicket(ticket);
       const canonicalSupermarket = findCanonicalSupermarketName(
-        ticket.supermarket,
+        sanitized.supermarket,
         canonicalTickets.map((entry) => entry.supermarket),
         nextAliases
       );
 
       const normalizedTicket = {
-        ...ticket,
+        ...sanitized,
         supermarket: canonicalSupermarket,
       };
 
@@ -269,14 +354,15 @@ export const useStore = create<TicketState>()(
       supermarketAliases: {},
 
       addTicket: (ticket) => {
+        const sanitized = sanitizeTicket(ticket);
         const resolvedSupermarket = findCanonicalSupermarketName(
-          ticket.supermarket,
+          sanitized.supermarket,
           get().tickets.map((entry) => entry.supermarket),
           get().supermarketAliases
         );
 
         const normalizedTicket: Ticket = {
-          ...ticket,
+          ...sanitized,
           supermarket: resolvedSupermarket,
         };
 

@@ -1,8 +1,9 @@
 import React from "react";
 import { View, Text, ScrollView, Pressable } from "react-native";
-import { useStore } from "../store/ticketStore";
-import PriceHistoryChart from "../components/PriceHistoryChart";
+import { useStore } from "../../store/ticketStore";
+import PriceHistoryChart from "../../components/PriceHistoryChart";
 import { FontAwesome } from "@expo/vector-icons";
+import { parseDate } from "../../utils/dates";
 
 const formatPrice = (value: number) => `€${value.toFixed(2)}`;
 
@@ -49,7 +50,7 @@ export default function Insights() {
           <View className="bg-white rounded-3xl premium-shadow p-6">
             {products.slice(0, 5).map((product) => {
               const pricesByDate = [...product.prices].sort(
-                (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+                (a, b) => parseDate(a.date).getTime() - parseDate(b.date).getTime()
               );
               const latest = pricesByDate[pricesByDate.length - 1];
               const previous = pricesByDate[pricesByDate.length - 2];

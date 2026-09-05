@@ -2,6 +2,7 @@ import React from "react";
 import { View, Text, Dimensions } from "react-native";
 import { LineChart } from "react-native-chart-kit";
 import { Product } from "../store/ticketStore";
+import { parseDate } from "../utils/dates";
 
 interface Props {
   product: Product;
@@ -9,11 +10,15 @@ interface Props {
 
 export default function PriceHistoryChart({ product }: Props) {
   const sortedPrices = [...product.prices].sort(
-    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    (a, b) => parseDate(a.date).getTime() - parseDate(b.date).getTime()
   );
 
   const data = {
-    labels: sortedPrices.map((p) => p.date.split("-").slice(1).join("/")),
+    labels: sortedPrices.map((p) => {
+      const d = parseDate(p.date);
+      if (Number.isNaN(d.getTime())) return p.date;
+      return `${d.getDate()}/${d.getMonth() + 1}`;
+    }),
     datasets: [
       {
         data: sortedPrices.map((p) => p.price),

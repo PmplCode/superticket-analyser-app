@@ -13,8 +13,21 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { useStore, Ticket } from "../store/ticketStore";
 import { analyzeReceipt, ExtractedTicketData } from "../utils/openrouter";
 import { FontAwesome } from "@expo/vector-icons";
+import { normalizeDateString, todayISODate } from "../utils/dates";
 
 const formatPrice = (value: number) => `€${value.toFixed(2)}`;
+
+const sanitizePreviewTotal = (ticket: ExtractedTicketData) => {
+  const sumItems = ticket.items.reduce(
+    (sum, item) => sum + (Number.isFinite(item.price) ? item.price : 0),
+    0
+  );
+  const moneyTotal =
+    Number.isFinite(ticket.total) && ticket.total > 0 && ticket.total < 1_000_000
+      ? Math.round(ticket.total * 100) / 100
+      : 0;
+  return moneyTotal > 0 ? moneyTotal : sumItems;
+};
 
 export default function TicketScanner() {
   const [image, setImage] = useState<string | null>(null);
@@ -139,7 +152,7 @@ export default function TicketScanner() {
 
     const newTicket: Ticket = {
       id: Math.random().toString(36).substr(2, 9),
-      date: analyzedTicket.date,
+      date: normalizeDateString(analyzedTicket.date) || todayISODate(),
       supermarket: chosenSupermarket,
       items: analyzedTicket.items,
       total: analyzedTicket.total,
@@ -272,13 +285,13 @@ export default function TicketScanner() {
             <View className="flex-row justify-between mb-2">
               <Text className="text-slate-500">Date</Text>
               <Text className="font-semibold text-slate-900">
-                {analyzedTicket.date}
+                {normalizeDateString(analyzedTicket.date) || todayISODate()}
               </Text>
             </View>
             <View className="flex-row justify-between">
               <Text className="text-slate-500">Items / total</Text>
               <Text className="font-semibold text-slate-900">
-                {analyzedTicket.items.length} items · {formatPrice(analyzedTicket.total)}
+                {analyzedTicket.items.length} items · {formatPrice(sanitizePreviewTotal(analyzedTicket))}
               </Text>
             </View>
           </View>

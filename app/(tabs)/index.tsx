@@ -6,21 +6,24 @@ import {
   TextInput,
   Pressable,
   Alert,
+  Modal,
 } from "react-native";
-import TicketScanner from "../components/TicketScanner";
+import TicketScanner from "../../components/TicketScanner";
 import {
   ProductPrice,
   ProductSearchResult,
   ProductSortMode,
   useStore,
-} from "../store/ticketStore";
+} from "../../store/ticketStore";
 import { FontAwesome } from "@expo/vector-icons";
-import PriceHistoryChart from "../components/PriceHistoryChart";
+import PriceHistoryChart from "../../components/PriceHistoryChart";
+import { useRouter } from "expo-router";
+import { parseDate, getDateTimestamp } from "../../utils/dates";
 
 const formatPrice = (value: number) => `€${value.toFixed(2)}`;
 
 const formatDate = (value: string) => {
-  const parsed = new Date(value);
+  const parsed = parseDate(value);
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
@@ -30,13 +33,6 @@ const formatDate = (value: string) => {
     month: "short",
     year: "numeric",
   }).format(parsed);
-};
-
-const getSavingsLabel = (product: ProductSearchResult) => {
-  const savings = product.latestPrice.price - product.lowestPrice.price;
-  return savings <= 0
-    ? "At best price now"
-    : `${formatPrice(savings)} above best`;
 };
 
 const sortOptions: { label: string; value: ProductSortMode }[] = [
@@ -64,13 +60,33 @@ const ProductMeta = ({
 
 export default function Dashboard() {
   const { tickets, products, searchProducts, resetData } = useStore();
+  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
   const [sortMode, setSortMode] = useState<ProductSortMode>("lowest-price");
-  const [selectedProductId, setSelectedProductId] = useState<string | null>(
-    null
-  );
+  const [selectedCategory, setSelectedCategory] = useState<string>("All");
+  const [categoryPickerVisible, setCategoryPickerVisible] = useState(false);
+
+  const categories = useMemo(() => {
+    const categorySet = new Set<string>();
+    products.forEach((product) => {
+      if (product.category) {
+        categorySet.add(product.category);
+      }
+    });
+    const all = ["All", ...Array.from(categorySet)].sort();
+    return all;
+  }, [products]);
 
   const searchResults = searchProducts(searchQuery, sortMode);
+
+  const filteredSearchResults = useMemo(() => {
+    if (selectedCategory === "All") {
+      return searchResults;
+    }
+    return searchResults.filter(
+      (item) => item.category === selectedCategory
+    );
+  }, [searchResults, selectedCategory]);
 
   const cheapestProducts = useMemo(
     () =>
@@ -130,7 +146,6 @@ export default function Dashboard() {
           onPress: () => {
             resetData();
             setSearchQuery("");
-            setSelectedProductId(null);
           },
         },
       ]
@@ -174,20 +189,84 @@ export default function Dashboard() {
           <Text className="text-lg font-bold text-slate-900 mb-4">
             Track Prices
           </Text>
-          <View className="flex-row items-center bg-white px-4 py-4 rounded-2xl premium-shadow">
-            <FontAwesome name="search" size={18} color="#94a3b8" />
-            <TextInput
-              placeholder="Search products..."
-              className="flex-1 ml-3 text-slate-900 font-medium"
-              value={searchQuery}
-              onChangeText={(value) => {
-                setSearchQuery(value);
-                if (!value.trim()) {
-                  setSelectedProductId(null);
-                }
-              }}
-            />
+          <View className="flex-row items-center gap-2.5 mb-4">
+            <View className="flex-1 flex-row items-center bg-white px-4 py-3.5 rounded-2xl premium-shadow">
+              <FontAwesome name="search" size={18} color="#94a3b8" />
+              <TextInput
+                placeholder="Search products..."
+                className="flex-1 ml-3 text-slate-900 font-medium"
+                value={searchQuery}
+                onChangeText={(value) => {
+                  setSearchQuery(value);
+                }}
+              />
+            </View>
+
+            <Pressable
+              onPress={() => setCategoryPickerVisible(true)}
+              className="flex-row items-center justify-center bg-white px-4 py-3.5 rounded-2xl premium-shadow"
+              style={{ width: 128 }}
+            >
+              <Text
+                className="text-slate-700 font-medium"
+                numberOfLines={1}
+                style={{ flexShrink: 1 }}
+              >
+                {selectedCategory}
+              </Text>
+              <FontAwesome
+                name="chevron-down"
+                size={12}
+                color="#64748b"
+                style={{ marginLeft: 6 }}
+              />
+            </Pressable>
           </View>
+
+            <Modal
+              visible={categoryPickerVisible}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setCategoryPickerVisible(false)}
+            >
+              <Pressable
+                className="flex-1 justify-end bg-black/40"
+                onPress={() => setCategoryPickerVisible(false)}
+              >
+                <Pressable
+                  onPress={() => {}}
+                  className="bg-white rounded-t-3xl p-6 pb-8"
+                >
+                  <Text className="text-lg font-bold text-slate-900 mb-4">
+                    Select category
+                  </Text>
+                  {categories.map((category) => {
+                    const isSelected = selectedCategory === category;
+                    return (
+                      <Pressable
+                        key={category}
+                        onPress={() => {
+                          setSelectedCategory(category);
+                          setCategoryPickerVisible(false);
+                        }}
+                        className="flex-row items-center justify-between py-3.5 border-b border-slate-50"
+                      >
+                        <Text
+                          className={`font-medium ${
+                            isSelected ? "text-indigo-600" : "text-slate-900"
+                          }`}
+                        >
+                          {category}
+                        </Text>
+                        {isSelected && (
+                          <FontAwesome name="check" size={16} color="#4f46e5" />
+                        )}
+                      </Pressable>
+                    );
+                  })}
+                </Pressable>
+              </Pressable>
+            </Modal>
 
           <ScrollView
             horizontal
@@ -221,15 +300,10 @@ export default function Dashboard() {
 
           {searchQuery.length > 0 && (
             <View className="mt-4 bg-white rounded-2xl p-4 premium-shadow">
-              {searchResults.length > 0 ? (
-                searchResults.map((item) => (
-                  <Pressable
+              {filteredSearchResults.length > 0 ? (
+                filteredSearchResults.map((item) => (
+                  <View
                     key={item.id}
-                    onPress={() =>
-                      setSelectedProductId((current) =>
-                        current === item.id ? null : item.id
-                      )
-                    }
                     className="py-4 border-b border-slate-50 last:border-0"
                   >
                     <View className="flex-row justify-between items-start">
@@ -258,69 +332,34 @@ export default function Dashboard() {
                             value={`${item.storeCount} store${item.storeCount === 1 ? "" : "s"}`}
                           />
                         </View>
-                      </View>
 
-                      <View className="items-end">
-                        <Text className="font-bold text-emerald-600 text-base">
-                          {formatPrice(item.lowestPrice.price)}
-                        </Text>
-                        <Text className="text-[11px] text-slate-400">
-                          Latest {formatPrice(item.latestPrice.price)}
-                        </Text>
-                        <Text className="text-[11px] text-slate-400 mt-1">
-                          {getSavingsLabel(item)}
-                        </Text>
+                        {item.prices
+                          .slice()
+                          .sort((a, b) => getDateTimestamp(b.date) - getDateTimestamp(a.date))
+                          .map((price, index) => (
+                            <View key={`${item.id}-${index}`} className="py-2">
+                              <View className="flex-row justify-between items-center">
+                                <Text className="text-sm text-slate-600">
+                                  {price.supermarket}
+                                  <Text className="text-slate-400">
+                                    {" · "}
+                                    {formatDate(price.date)}
+                                  </Text>
+                                </Text>
+                                <Text className="font-semibold text-slate-900 text-sm">
+                                  {formatPrice(price.price)}
+                                </Text>
+                              </View>
+                              {price.unitPrice !== undefined && (
+                                <Text className="text-[11px] text-slate-400 mt-0.5">
+                                  {formatPrice(price.unitPrice)}/{price.unit || "each"}
+                                </Text>
+                              )}
+                            </View>
+                          ))}
                       </View>
                     </View>
-
-                    {selectedProductId === item.id && (
-                      <View className="mt-4 pt-4 border-t border-slate-100">
-                        <View className="bg-slate-50 rounded-2xl p-4 mb-4">
-                          <Text className="text-slate-900 font-bold mb-3">
-                            Price summary
-                          </Text>
-                          <View className="flex-row justify-between mb-2">
-                            <Text className="text-slate-500">Best price</Text>
-                            <Text className="font-semibold text-slate-900">
-                              {formatPrice(item.lowestPrice.price)} at{" "}
-                              {item.lowestPrice.supermarket}
-                            </Text>
-                          </View>
-                          <View className="flex-row justify-between mb-2">
-                            <Text className="text-slate-500">Latest purchase</Text>
-                            <Text className="font-semibold text-slate-900">
-                              {formatDate(item.latestPrice.date)}
-                            </Text>
-                          </View>
-                          <View className="flex-row justify-between">
-                            <Text className="text-slate-500">Stores tracked</Text>
-                            <Text className="font-semibold text-slate-900">
-                              {item.supermarkets.join(", ")}
-                            </Text>
-                          </View>
-                        </View>
-
-                        {item.prices.length > 1 && (
-                          <View className="mb-4">
-                            <PriceHistoryChart product={item} />
-                          </View>
-                        )}
-
-                        <Text className="text-slate-900 font-bold mb-2">
-                          Purchase history
-                        </Text>
-                        <View className="bg-slate-50 rounded-2xl px-4">
-                          {[...item.prices]
-                            .sort(
-                              (a, b) =>
-                                new Date(b.date).getTime() -
-                                new Date(a.date).getTime()
-                            )
-                            .map(renderPriceRow)}
-                        </View>
-                      </View>
-                    )}
-                  </Pressable>
+                  </View>
                 ))
               ) : (
                 <Text className="text-center text-slate-400 py-4">
@@ -380,7 +419,7 @@ export default function Dashboard() {
             <Text className="text-lg font-bold text-slate-900">
               Recent Tickets
             </Text>
-            <Pressable>
+            <Pressable onPress={() => router.push("/tickets")}>
               <Text className="text-indigo-600 font-semibold">See all</Text>
             </Pressable>
           </View>

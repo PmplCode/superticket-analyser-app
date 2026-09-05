@@ -3,7 +3,7 @@ import axios from "axios";
 export interface ExtractedTicketData {
   date: string;
   supermarket: string;
-  items: { name: string; price: number; category: string }[];
+  items: { name: string; price: number; quantity?: number; unit?: string; category: string }[];
   total: number;
 }
 
@@ -33,14 +33,14 @@ export const analyzeReceipt = async (
           messages: [
             {
               role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: `Analyze this shopping ticket image and extract the following information in JSON format:
+content: [
+                  {
+                    type: "text",
+                    text: `Analyze this shopping ticket image and extract the following information in JSON format:
 - supermarket: name of the store
 - date: date of the receipt (YYYY-MM-DD)
 - total: total amount spent (number)
-- items: list of products, each with name, price (number).
+- items: list of products, each with name, price (number), quantity (number, optional), unit (optional, e.g. "kg", "g", "pcs", "piece", "liter", "ml"), category (optional)
 
 Return ONLY the JSON object.`.trim(),
                 },
