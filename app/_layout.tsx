@@ -24,6 +24,7 @@ export default function Layout() {
         name="tickets"
         options={{ title: 'Recent Tickets' }}
       />
+      <Stack.Screen name="product/[id]" options={{ title: "Product" }} />
     </Stack>
   );
 }

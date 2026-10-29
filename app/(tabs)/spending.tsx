@@ -1,180 +1,87 @@
-import React, { useMemo } from "react";
-import {
-  View,
-  Text,
-  ScrollView,
-  Dimensions,
-} from "react-native";
-import { useStore } from "../../store/ticketStore";
+import React, { useMemo, useState } from "react";
+import { View, Text, ScrollView, Pressable, useWindowDimensions } from "react-native";
 import { BarChart } from "react-native-chart-kit";
 import { FontAwesome } from "@expo/vector-icons";
-import { parseDate } from "../../utils/dates";
+import { useStore } from "../../store/ticketStore";
+import {
+  getCategorySpending,
+  getMonthTotals,
+  getStoreTotals,
+  roundShares,
+  shiftMonthKey,
+} from "../../utils/insights";
+import {
+  formatMonthKey,
+  formatPercent,
+  formatPrice,
+  monthKeyOf,
+} from "../../utils/format";
 
-const formatPrice = (value: number) => `€${value.toFixed(2)}`;
-
-const formatMonthLabel = (monthKey: string) => {
-  const [year, month] = monthKey.split("-").map(Number);
-  const date = new Date(year, month - 1, 1);
-  return date.toLocaleDateString("en-GB", { month: "short" });
+const ShareBars = ({ rows }: { rows: { label: string; total: number; hint?: string }[] }) => {
+  const shares = roundShares(rows.map((r) => r.total));
+  const max = Math.max(...rows.map((r) => r.total), 0.01);
+  return (
+    <View>
+      {rows.map((row, i) => (
+        <View key={row.label} className="mb-4">
+          <View className="flex-row justify-between items-center mb-1">
+            <Text className="font-semibold text-slate-900 flex-1 pr-2" numberOfLines={1}>
+              {row.label}
+            </Text>
+            <Text className="font-bold text-slate-900">{formatPrice(row.total)}</Text>
+          </View>
+          <View className="h-2 bg-slate-100 rounded-full overflow-hidden">
+            <View
+              className="h-full bg-indigo-600 rounded-full"
+              style={{ width: `${(row.total / max) * 100}%` }}
+            />
+          </View>
+          <Text className="text-[11px] text-slate-500 mt-1">
+            {shares[i]}% of spending{row.hint ? ` · ${row.hint}` : ""}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
 };
 
-const Spending = () => {
-  const { tickets } = useStore();
+export default function Spending() {
+  const tickets = useStore((s) => s.tickets);
+  const { width } = useWindowDimensions();
 
-  const totalSpent = useMemo(() => {
-    return tickets.reduce((sum, ticket) => sum + ticket.total, 0);
-  }, [tickets]);
+  const monthTotals = useMemo(() => getMonthTotals(tickets), [tickets]);
+  const monthKeys = useMemo(() => monthTotals.map(([k]) => k), [monthTotals]);
+  const latestKey = monthKeys[monthKeys.length - 1] ?? monthKeyOf(new Date());
+  const [selected, setSelected] = useState<string | null>(null);
+  const month = selected && monthKeys.includes(selected) ? selected : latestKey;
 
-  const averagePerTrip = useMemo(() => {
-    if (tickets.length === 0) return 0;
-    return totalSpent / tickets.length;
-  }, [tickets.length, totalSpent]);
+  const monthTotal = monthTotals.find(([k]) => k === month)?.[1] ?? 0;
+  const previousTotal =
+    monthTotals.find(([k]) => k === shiftMonthKey(month, -1))?.[1] ?? null;
+  const change =
+    previousTotal && previousTotal > 0
+      ? ((monthTotal - previousTotal) / previousTotal) * 100
+      : null;
 
-  const spendingByMonth = useMemo(() => {
-    const monthMap = new Map<string, number>();
-    tickets.forEach((ticket) => {
-      const date = parseDate(ticket.date);
-      if (Number.isNaN(date.getTime())) return;
-      const monthKey = `${date.getFullYear()}-${(date.getMonth() + 1)
-        .toString()
-        .padStart(2, "0")}`;
-      monthMap.set(monthKey, (monthMap.get(monthKey) ?? 0) + ticket.total);
-    });
-    const sorted = [...monthMap.entries()].sort((a, b) =>
-      a[0].localeCompare(b[0])
-    );
-    return sorted.slice(-6);
-  }, [tickets]);
-
-  const spendingBySupermarket = useMemo(() => {
-    const marketMap = new Map<string, number>();
-    tickets.forEach((ticket) => {
-      marketMap.set(
-        ticket.supermarket,
-        (marketMap.get(ticket.supermarket) ?? 0) + ticket.total
-      );
-    });
-    return Array.from(marketMap.entries()).sort((a, b) => b[1] - a[1]);
-  }, [tickets]);
-
-  const chartData = useMemo(
-    () => ({
-      labels: spendingByMonth.map(([month]) => formatMonthLabel(month)),
-      datasets: [
-        {
-          data: spendingByMonth.map(([, total]) => total),
-        },
-      ],
-    }),
-    [spendingByMonth]
+  const monthTickets = useMemo(
+    () => getStoreTotals(tickets, month).reduce((s, r) => s + r.trips, 0),
+    [tickets, month]
   );
+  const stores = useMemo(() => getStoreTotals(tickets, month), [tickets, month]);
+  const categories = useMemo(() => getCategorySpending(tickets, month), [tickets, month]);
 
-  const totalSupermarketSpend = spendingBySupermarket.reduce(
-    (sum, [, total]) => sum + total,
-    0
-  );
+  const multiYear =
+    new Set(monthKeys.slice(-6).map((k) => k.slice(0, 4))).size > 1;
+  const last6 = monthTotals.slice(-6);
+  const chartData = {
+    labels: last6.map(([k]) => formatMonthKey(k, multiYear)),
+    datasets: [{ data: last6.map(([, t]) => t) }],
+  };
 
-  return (
-    <ScrollView className="flex-1 bg-slate-50">
-      <View className="p-6">
-        <Text className="text-2xl font-bold text-slate-900 mb-2">
-          Spending Summary
-        </Text>
-        <Text className="text-slate-400 mb-6">
-          Tracking across {tickets.length} tickets
-        </Text>
-
-        <View className="bg-white p-5 rounded-3xl premium-shadow mb-6">
-          <View className="flex-row justify-between items-center">
-            <View>
-              <Text className="text-slate-500 text-sm">Total spent</Text>
-              <Text className="text-4xl font-bold text-indigo-600">
-                {formatPrice(totalSpent)}
-              </Text>
-            </View>
-            <View className="items-end">
-              <Text className="text-xs text-slate-400">
-                Average per trip
-              </Text>
-              <Text className="text-lg font-bold text-slate-900">
-                {formatPrice(averagePerTrip)}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {spendingByMonth.length > 0 && (
-          <View className="mb-6">
-            <Text className="text-slate-900 font-bold mb-3 text-lg">
-              Spending by month
-            </Text>
-            <View className="bg-white p-4 rounded-3xl premium-shadow">
-              <BarChart
-                data={chartData}
-                width={Dimensions.get("window").width - 72}
-                height={220}
-                yAxisLabel="€"
-                yAxisSuffix=""
-                chartConfig={{
-                  backgroundColor: "#ffffff",
-                  backgroundGradientFrom: "#ffffff",
-                  backgroundGradientTo: "#ffffff",
-                  decimalPlaces: 0,
-                  color: (opacity = 1) => `rgba(79, 70, 229, ${opacity})`,
-                  labelColor: (opacity = 1) => `rgba(100, 116, 139, ${opacity})`,
-                  barPercentage: 0.6,
-                  propsForBackgroundLines: {
-                    strokeDasharray: "",
-                    stroke: "#e2e8f0",
-                  },
-                }}
-                fromZero
-                showValuesOnTopOfBars
-                style={{
-                  borderRadius: 16,
-                  paddingRight: 8,
-                }}
-              />
-            </View>
-          </View>
-        )}
-
-        {spendingBySupermarket.length > 0 && (
-          <View className="mb-6">
-            <Text className="text-slate-900 font-bold mb-3 text-lg">
-              Spending by store
-            </Text>
-            <View className="bg-white p-5 rounded-3xl premium-shadow">
-              {spendingBySupermarket.slice(0, 6).map(([supermarket, total]) => {
-                const ratio =
-                  totalSupermarketSpend > 0 ? total / totalSupermarketSpend : 0;
-                return (
-                  <View key={supermarket} className="mb-4 last:mb-0">
-                    <View className="flex-row justify-between items-center mb-1">
-                      <Text className="font-semibold text-slate-900">
-                        {supermarket}
-                      </Text>
-                      <Text className="font-bold text-slate-900">
-                        {formatPrice(total)}
-                      </Text>
-                    </View>
-                    <View className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <View
-                        className="h-full bg-indigo-600 rounded-full"
-                        style={{ width: `${Math.round(ratio * 100)}%` }}
-                      />
-                    </View>
-                    <Text className="text-[10px] text-slate-400 mt-1">
-                      {Math.round(ratio * 100)}% of spending
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-        )}
-
-        {tickets.length === 0 && (
+  if (tickets.length === 0) {
+    return (
+      <ScrollView className="flex-1 bg-slate-50">
+        <View className="p-6">
           <View className="bg-white p-8 rounded-3xl premium-shadow items-center">
             <View className="bg-indigo-50 p-6 rounded-full mb-4">
               <FontAwesome name="ticket" size={32} color="#4f46e5" />
@@ -186,10 +93,131 @@ const Spending = () => {
               Scan tickets to see your spending summary.
             </Text>
           </View>
+        </View>
+      </ScrollView>
+    );
+  }
+
+  const idx = monthKeys.indexOf(month);
+  const prevKey = idx > 0 ? monthKeys[idx - 1] : null;
+  const nextKey = idx >= 0 && idx < monthKeys.length - 1 ? monthKeys[idx + 1] : null;
+
+  return (
+    <ScrollView className="flex-1 bg-slate-50">
+      <View className="p-6">
+        <Text className="text-2xl font-bold text-slate-900 mb-4">Spending</Text>
+
+        <View className="flex-row items-center justify-between mb-4">
+          <Pressable
+            disabled={!prevKey}
+            onPress={() => prevKey && setSelected(prevKey)}
+            accessibilityRole="button"
+            accessibilityLabel="Previous month"
+            className={`p-3 ${prevKey ? "" : "opacity-30"}`}
+          >
+            <FontAwesome name="chevron-left" size={16} color="#4f46e5" />
+          </Pressable>
+          <Text className="text-lg font-bold text-slate-900">
+            {formatMonthKey(month)} {month.slice(0, 4)}
+          </Text>
+          <Pressable
+            disabled={!nextKey}
+            onPress={() => nextKey && setSelected(nextKey)}
+            accessibilityRole="button"
+            accessibilityLabel="Next month"
+            className={`p-3 ${nextKey ? "" : "opacity-30"}`}
+          >
+            <FontAwesome name="chevron-right" size={16} color="#4f46e5" />
+          </Pressable>
+        </View>
+
+        <View className="bg-white p-5 rounded-3xl premium-shadow mb-6">
+          <View className="flex-row justify-between items-center">
+            <View>
+              <Text className="text-slate-500 text-sm">Spent this month</Text>
+              <Text className="text-4xl font-bold text-indigo-600">
+                {formatPrice(monthTotal)}
+              </Text>
+              {change !== null && (
+                <Text
+                  className={`text-xs font-bold mt-1 ${
+                    change > 0 ? "text-red-600" : "text-green-600"
+                  }`}
+                >
+                  {formatPercent(change)} vs previous month
+                </Text>
+              )}
+            </View>
+            <View className="items-end">
+              <Text className="text-xs text-slate-500">Average per trip</Text>
+              <Text className="text-lg font-bold text-slate-900">
+                {formatPrice(monthTickets > 0 ? monthTotal / monthTickets : 0)}
+              </Text>
+              <Text className="text-xs text-slate-400">{monthTickets} trips</Text>
+            </View>
+          </View>
+        </View>
+
+        {last6.length > 0 && (
+          <View className="mb-6">
+            <Text className="text-slate-900 font-bold mb-3 text-lg">Last months</Text>
+            <View
+              className="bg-white p-4 rounded-3xl premium-shadow"
+              accessible
+              accessibilityLabel={`Monthly spending: ${last6
+                .map(([k, t]) => `${formatMonthKey(k, true)} ${formatPrice(t)}`)
+                .join(", ")}`}
+            >
+              <BarChart
+                data={chartData}
+                width={Math.max(width - 72, 200)}
+                height={220}
+                yAxisLabel="€"
+                yAxisSuffix=""
+                chartConfig={{
+                  backgroundColor: "#ffffff",
+                  backgroundGradientFrom: "#ffffff",
+                  backgroundGradientTo: "#ffffff",
+                  decimalPlaces: 0,
+                  color: (opacity = 1) => `rgba(79, 70, 229, ${opacity})`,
+                  labelColor: (opacity = 1) => `rgba(100, 116, 139, ${opacity})`,
+                  barPercentage: 0.6,
+                  propsForBackgroundLines: { strokeDasharray: "", stroke: "#e2e8f0" },
+                }}
+                fromZero
+                showValuesOnTopOfBars
+                style={{ borderRadius: 16, paddingRight: 8 }}
+              />
+            </View>
+          </View>
+        )}
+
+        {categories.length > 0 && (
+          <View className="mb-6">
+            <Text className="text-slate-900 font-bold mb-3 text-lg">By category</Text>
+            <View className="bg-white p-5 rounded-3xl premium-shadow">
+              <ShareBars
+                rows={categories.slice(0, 8).map(([label, total]) => ({ label, total }))}
+              />
+            </View>
+          </View>
+        )}
+
+        {stores.length > 0 && (
+          <View className="mb-6">
+            <Text className="text-slate-900 font-bold mb-3 text-lg">By store</Text>
+            <View className="bg-white p-5 rounded-3xl premium-shadow">
+              <ShareBars
+                rows={stores.slice(0, 6).map((s) => ({
+                  label: s.supermarket,
+                  total: s.total,
+                  hint: `${s.trips} trip${s.trips === 1 ? "" : "s"}`,
+                }))}
+              />
+            </View>
+          </View>
         )}
       </View>
     </ScrollView>
   );
-};
-
-export default Spending;
+}

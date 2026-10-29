@@ -1,15 +1,16 @@
 # 🛒 SuperTicket
 
-SuperTicket is a mobile-first app that lets you take a photo of your supermarket receipt and instantly analyzes your groceries. Built with Expo, React Native, and Tailwind CSS (NativeWind), SuperTicket uses AI to extract, categorize, and review your shopping items—giving you actionable health and budget tips based on your purchases.
+SuperTicket is a mobile-first app that lets you take a photo of your supermarket receipt and instantly analyzes your groceries. Built with Expo, React Native, and Tailwind CSS (NativeWind), SuperTicket uses a vision AI model to extract and categorize your shopping items, then tracks prices and spending over time.
 
 ---
 
 ## ✨ Features
 
-- **Receipt Photo Analysis**: Snap a picture of your supermarket ticket and get instant feedback.
-- **Grocery Extraction & Categorization**: Automatically lists and groups your purchased items (fruits, vegetables, snacks, etc.).
-- **Health & Budget Insights**: Highlights healthy and less healthy choices, and suggests ways to improve your shopping.
-- **Clear, Actionable Advice**: Summarizes nutritional quality and spending patterns in a user-friendly format.
+- **Receipt Photo Analysis**: Snap a ticket; a vision model returns store, date, total and items.
+- **Review before saving**: Edit store, date, items, prices and categories; total mismatch warning.
+- **Price tracking**: Product search, per-product history, cheapest store and price movers.
+- **Spending**: Monthly totals with previous-month comparison, by category and by store.
+- **Backup**: Export JSON/CSV and import a JSON backup.
 - **Cross-Platform**: Works on iOS, Android, and web (via Expo).
 - **Modern UI**: Styled with Tailwind CSS via NativeWind for a clean, responsive look.
 
@@ -20,6 +21,12 @@ SuperTicket is a mobile-first app that lets you take a photo of your supermarket
 <!-- Add screenshots here if available -->
 
 ---
+
+## ⚙️ Configuration
+
+Copy `.env.example` to `.env.local` and set `EXPO_PUBLIC_OPENROUTER_MODEL` to a model that accepts image input. `EXPO_PUBLIC_*` values are bundled into the app: use `EXPO_PUBLIC_AI_ENDPOINT` with your own proxy for production so the key never ships in the client.
+
+Scripts: `npm run typecheck`, `npm test`.
 
 ## 🚀 Getting Started
 

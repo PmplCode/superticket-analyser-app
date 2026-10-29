@@ -35,7 +35,7 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="advice"
+        name="insights"
         options={{
           title: "Insights",
           tabBarIcon: ({ color }) => (
