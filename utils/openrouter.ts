@@ -46,16 +46,16 @@ export class ReceiptAnalysisError extends Error {
 const ENDPOINT =
   process.env.EXPO_PUBLIC_AI_ENDPOINT ||
   "https://openrouter.ai/api/v1/chat/completions";
-const TIMEOUT_MS = 45_000;
+const TIMEOUT_MS = 60_000;
 const MAX_ATTEMPTS = 2; // per model
 // Primary first, then fallbacks. Different upstream providers so one rate-limited
 // pool does not take the whole chain down. Vision-capable models only.
 // Override with EXPO_PUBLIC_OPENROUTER_MODEL (comma-separated).
 const DEFAULT_MODELS = [
   "nvidia/nemotron-3.5-super-vl:free",
-  "thinkingmachines/inkling-small:free",
   "google/gemma-4-31b-it:free",
-  "thinkingmachines/inkling:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "google/gemma-4-26b-a4b-it:free",
 ];
 const getModels = () => {
   const fromEnv = (process.env.EXPO_PUBLIC_OPENROUTER_MODEL ?? "")
@@ -101,9 +101,9 @@ const classify = (error: unknown): ReceiptAnalysisError => {
     if (error.code === "ECONNABORTED") return new ReceiptAnalysisError("timeout");
     if (!error.response) return new ReceiptAnalysisError("no_network");
     if (status === 429) return new ReceiptAnalysisError("rate_limited", detail);
-    if (status === 401 || status === 403)
-      return new ReceiptAnalysisError("auth", detail);
-    if (status === 400 || status === 404)
+    if (status === 401) return new ReceiptAnalysisError("auth", detail);
+    // 403 is per-model (e.g. restricted to certain apps), so try the next one.
+    if (status === 400 || status === 403 || status === 404)
       return new ReceiptAnalysisError("model_unavailable", detail);
     return new ReceiptAnalysisError("bad_response", `HTTP ${status}`);
   }
